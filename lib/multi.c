@@ -130,6 +130,30 @@ static const char * const multi_statename[]={
 };
 #endif
 
+// <http://www.unixwiz.net/techtips/outputdebugstring.html>
+void odprintf(const char *format, ...)
+{
+  char    buf[4096], *p = buf;
+  va_list args;
+  int     n;
+
+  va_start(args, format);
+  n = _vsnprintf(p, sizeof buf - 3, format, args); // buf-3 is room for CR/LF/NUL
+  va_end(args);
+
+  p += (n < 0) ? sizeof buf - 3 : n;
+
+  while ( p > buf  &&  isspace(p[-1]) )
+    *--p = '\0';
+
+  *p++ = '\r';
+  *p++ = '\n';
+  *p   = '\0';
+
+  OutputDebugStringA(buf);
+}
+
+
 /* function pointer called once when switching TO a state */
 typedef void (*init_multistate_func)(struct Curl_easy *data);
 
@@ -280,6 +304,7 @@ static void sockhash_destroy(struct Curl_hash *h)
   he = Curl_hash_next_element(&iter);
   while(he) {
     struct Curl_sh_entry *sh = (struct Curl_sh_entry *)he->ptr;
+    odprintf(__FUNCTION__ " Curl_hash_destroy: transfers=%p", &sh->transfers);
     Curl_hash_destroy(&sh->transfers);
     he = Curl_hash_next_element(&iter);
   }
@@ -304,11 +329,13 @@ static struct Curl_sh_entry *sh_addentry(struct Curl_hash *sh,
   if(!check)
     return NULL; /* major failure */
 
+  odprintf(__FUNCTION__ " Curl_hash_init: transfers=%p", &check->transfers);
   Curl_hash_init(&check->transfers, TRHASH_SIZE, trhash, trhash_compare,
                  trhash_dtor);
 
   /* make/add new hash entry */
   if(!Curl_hash_add(sh, (char *)&s, sizeof(curl_socket_t), check)) {
+    odprintf(__FUNCTION__ " Curl_hash_destroy: transfers=%p", &check->transfers);
     Curl_hash_destroy(&check->transfers);
     free(check);
     return NULL; /* major failure */
@@ -322,6 +349,7 @@ static struct Curl_sh_entry *sh_addentry(struct Curl_hash *sh,
 static void sh_delentry(struct Curl_sh_entry *entry,
                         struct Curl_hash *sh, curl_socket_t s)
 {
+  odprintf(__FUNCTION__ " Curl_hash_destroy: transfers=%p", &entry->transfers);
   Curl_hash_destroy(&entry->transfers);
 
   /* We remove the hash entry. This will end up in a call to
@@ -488,6 +516,7 @@ CURLMcode curl_multi_add_handle(CURLM *m, CURL *d)
   CURLMcode rc;
   struct Curl_multi *multi = m;
   struct Curl_easy *data = d;
+  odprintf(__FUNCTION__ " curl_multi_add_handle: multi=%p data=%p", multi, data);
   /* First, make some basic checks that the CURLM handle is a good handle */
   if(!GOOD_MULTI_HANDLE(multi))
     return CURLM_BAD_HANDLE;
@@ -792,6 +821,8 @@ CURLMcode curl_multi_remove_handle(CURLM *m, CURL *d)
   struct Curl_llist_node *e;
   CURLMcode rc;
   bool removed_timer = FALSE;
+
+  odprintf(__FUNCTION__ " curl_multi_remove_handle: multi=%p data=%p", multi, data);
 
   /* First, make some basic checks that the CURLM handle is a good handle */
   if(!GOOD_MULTI_HANDLE(multi))
@@ -2994,6 +3025,9 @@ CURLMcode Curl_multi_pollset_ev(struct Curl_multi *multi,
         /* fatal */
         return CURLM_OUT_OF_MEMORY;
     }
+
+    odprintf(__FUNCTION__ " xxx: transfers=%p data=%p last_action=%d s=%d", &entry->transfers, data, last_action, s);
+
     if(last_action && (last_action != cur_action)) {
       /* Socket was used already, but different action now */
       if(last_action & CURL_POLL_IN) {
@@ -3015,14 +3049,17 @@ CURLMcode Curl_multi_pollset_ev(struct Curl_multi *multi,
                             sizeof(struct Curl_easy *))) {
       DEBUGASSERT(entry->users < 100000); /* detect weird values */
       /* a new transfer using this socket */
+      odprintf(__FUNCTION__ " users++: entry=%p users=%d data=%p", entry, entry->users, data);
       entry->users++;
       if(cur_action & CURL_POLL_IN)
         entry->readers++;
       if(cur_action & CURL_POLL_OUT)
         entry->writers++;
       /* add 'data' to the transfer hash on this socket! */
+      odprintf(__FUNCTION__ " Curl_hash_add: transfers=%p data=%p", &entry->transfers, data);
       if(!Curl_hash_add(&entry->transfers, (char *)&data, /* hash key */
                         sizeof(struct Curl_easy *), data)) {
+        odprintf(__FUNCTION__ " Curl_hash_destroy: transfers=%p", &entry->transfers);
         Curl_hash_destroy(&entry->transfers);
         return CURLM_OUT_OF_MEMORY;
       }
@@ -3076,6 +3113,7 @@ CURLMcode Curl_multi_pollset_ev(struct Curl_multi *multi,
       unsigned char oldactions = last_ps->actions[i];
       /* this socket has been removed. Decrease user count */
       DEBUGASSERT(entry->users);
+      odprintf(__FUNCTION__ " users--: entry=%p users=%d data=%p", entry, entry->users, data);
       entry->users--;
       if(oldactions & CURL_POLL_OUT)
         entry->writers--;
@@ -3099,6 +3137,7 @@ CURLMcode Curl_multi_pollset_ev(struct Curl_multi *multi,
       }
       else {
         /* still users, but remove this handle as a user of this socket */
+        odprintf(__FUNCTION__ " Curl_hash_delete: transfers=%p data=%p s=%d", &entry->transfers, data, s);
         if(Curl_hash_delete(&entry->transfers, (char *)&data,
                             sizeof(struct Curl_easy *))) {
           DEBUGASSERT(NULL);
@@ -3130,6 +3169,7 @@ CURLcode Curl_updatesocket(struct Curl_easy *data)
 
 void Curl_multi_closed(struct Curl_easy *data, curl_socket_t s)
 {
+  odprintf(__FUNCTION__ "data=%p s=%d", data, s);
   if(data) {
     /* if there is still an easy handle associated with this connection */
     struct Curl_multi *multi = data->multi;
