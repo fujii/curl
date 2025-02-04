@@ -130,6 +130,30 @@ static const char * const multi_statename[]={
 };
 #endif
 
+// <http://www.unixwiz.net/techtips/outputdebugstring.html>
+void odprintf(const char *format, ...)
+{
+  char    buf[4096], *p = buf;
+  va_list args;
+  int     n;
+
+  va_start(args, format);
+  n = _vsnprintf(p, sizeof buf - 3, format, args); // buf-3 is room for CR/LF/NUL
+  va_end(args);
+
+  p += (n < 0) ? sizeof buf - 3 : n;
+
+  while ( p > buf  &&  isspace(p[-1]) )
+    *--p = '\0';
+
+  *p++ = '\r';
+  *p++ = '\n';
+  *p   = '\0';
+
+  OutputDebugStringA(buf);
+}
+
+
 /* function pointer called once when switching TO a state */
 typedef void (*init_multistate_func)(struct Curl_easy *data);
 
@@ -280,6 +304,7 @@ static void sockhash_destroy(struct Curl_hash *h)
   he = Curl_hash_next_element(&iter);
   while(he) {
     struct Curl_sh_entry *sh = (struct Curl_sh_entry *)he->ptr;
+    odprintf("Curl_hash_destroy: transfers=%p", &sh->transfers);
     Curl_hash_destroy(&sh->transfers);
     he = Curl_hash_next_element(&iter);
   }
@@ -304,11 +329,13 @@ static struct Curl_sh_entry *sh_addentry(struct Curl_hash *sh,
   if(!check)
     return NULL; /* major failure */
 
+  odprintf("Curl_hash_init: transfers=%p", &check->transfers);
   Curl_hash_init(&check->transfers, TRHASH_SIZE, trhash, trhash_compare,
                  trhash_dtor);
 
   /* make/add new hash entry */
   if(!Curl_hash_add(sh, (char *)&s, sizeof(curl_socket_t), check)) {
+    odprintf("Curl_hash_destroy: transfers=%p", &check->transfers);
     Curl_hash_destroy(&check->transfers);
     free(check);
     return NULL; /* major failure */
@@ -322,6 +349,7 @@ static struct Curl_sh_entry *sh_addentry(struct Curl_hash *sh,
 static void sh_delentry(struct Curl_sh_entry *entry,
                         struct Curl_hash *sh, curl_socket_t s)
 {
+  odprintf("Curl_hash_destroy: transfers=%p", &entry->transfers);
   Curl_hash_destroy(&entry->transfers);
 
   /* We remove the hash entry. This will end up in a call to
@@ -2994,6 +3022,9 @@ CURLMcode Curl_multi_pollset_ev(struct Curl_multi *multi,
         /* fatal */
         return CURLM_OUT_OF_MEMORY;
     }
+
+    odprintf("Curl_multi_pollset_ev: transfers=%p data=%p last_action=%d s=%d", &entry->transfers, data, last_action, s);
+
     if(last_action && (last_action != cur_action)) {
       /* Socket was used already, but different action now */
       if(last_action & CURL_POLL_IN) {
@@ -3021,8 +3052,10 @@ CURLMcode Curl_multi_pollset_ev(struct Curl_multi *multi,
       if(cur_action & CURL_POLL_OUT)
         entry->writers++;
       /* add 'data' to the transfer hash on this socket! */
+      odprintf("Curl_hash_add: transfers=%p data=%p", &entry->transfers, data);
       if(!Curl_hash_add(&entry->transfers, (char *)&data, /* hash key */
                         sizeof(struct Curl_easy *), data)) {
+        odprintf("Curl_hash_destroy: transfers=%p", &entry->transfers);
         Curl_hash_destroy(&entry->transfers);
         return CURLM_OUT_OF_MEMORY;
       }
@@ -3099,6 +3132,7 @@ CURLMcode Curl_multi_pollset_ev(struct Curl_multi *multi,
       }
       else {
         /* still users, but remove this handle as a user of this socket */
+        odprintf("Curl_hash_delete: transfers=%p data=%p", &entry->transfers, data);
         if(Curl_hash_delete(&entry->transfers, (char *)&data,
                             sizeof(struct Curl_easy *))) {
           DEBUGASSERT(NULL);
