@@ -60,6 +60,7 @@
 void Curl_debug(struct Curl_easy *data, curl_infotype type,
                 char *ptr, size_t size)
 {
+  OutputDebugStringA(ptr);
   if(data->set.verbose) {
     static const char s_infotype[CURLINFO_END][3] = {
       "* ", "< ", "> ", "{ ", "} ", "{ ", "} " };
